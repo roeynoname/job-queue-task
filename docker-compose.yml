@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jobqueue
+      POSTGRES_PASSWORD: jobqueue
+      POSTGRES_DB: jobqueue
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobqueue"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://jobqueue:jobqueue@db:5432/jobqueue
+      REDIS_URL: redis://redis:6379/0
+      WORKER_TIMEOUT_SECONDS: "600"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app  # Hot reload for development
+
+  worker:
+    build: .
+    command: python -m worker.main
+    environment:
+      DATABASE_URL: postgresql://jobqueue:jobqueue@db:5432/jobqueue
+      REDIS_URL: redis://redis:6379/0
+      WORKER_TIMEOUT_SECONDS: "600"
+      MONITOR_INTERVAL_SECONDS: "30"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 12  # Two workers — demonstrates the concurrency safety of BZPOPMAX
+
+volumes:
+  postgres_data:
